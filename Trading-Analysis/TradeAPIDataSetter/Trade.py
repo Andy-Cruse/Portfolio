@@ -1,35 +1,36 @@
 import math
-import yfinance as yf
-import datetime as dt
+
+import matplotlib.pyplot as plt
+import mysql.connector
 import numpy as np
 import pandas as pd
 import requests
-from TradeAPIDataSetter.secrets import Secrets
-import matplotlib.pyplot as plt
-import mysql.connector
-
+import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, LSTM
+from tensorflow.keras.models import Sequential
+
+from TradeAPIDataSetter.secrets import Secrets
 
 plt.style.use('fivethirtyeight')
 
 
 class Trade:
-    def __init__(self, symbol):
+    def __init__(self, company):
         sec = Secrets()  # API key stored in secrets.py
         self.token = sec.api_token
         self.user = sec.username
         self.passwd = sec.password
-        self.symbol = symbol
-    #   self.data = Trade.connect_to_api(self)
+        self.symbol = company
+        #   self.data = Trade.connect_to_api(self)
         self.data = Trade.connect_to_yahoo(self)
         self.data = pd.DataFrame.from_dict(self.data)
         self.data = self.data.replace({np.nan: 0})
 
     # Returns full JSON from API giving Stock data
     def connect_to_api(self):
-        url = f'http://api.marketstack.com/v1/eod?access_key={self.token}&symbols={self.symbol}&date_from=1998-07-14&date_to=2021-07-14&limit=1000'
+        url = f'http://api.marketstack.com/v1/eod?access_key={self.token}&symbols={self.symbol}&date_from=1998-07-14' \
+              f'&date_to=2021-07-14&limit=1000 '
         r = requests.get(url)
         data = r.json()
         return data['data']
@@ -93,6 +94,31 @@ class Trade:
         # mycursor.execute(f'UPDATE {self.symbol} SET adj_high=NULL WHERE adj_high=0')
         db.commit()
 
+    def add_to_all_data_mysql(self):
+        db = mysql.connector.connect(host='localhost',
+                                     user=self.user,
+                                     passwd=self.passwd)
+        mycursor = db.cursor()
+        mycursor.execute('USE python_stock')
+        for i in range(0, len(self.data) - 1):
+            dat = '"' + f'{self.data.index[i]}' + '"'  # The API format is weird and this makes it normal
+            ope = '"' + f'{self.data["Open"][i]}' + '"'
+            high = '"' + f'{self.data["High"][i]}' + '"'
+            low = '"' + f'{self.data["Low"][i]}' + '"'
+            close = '"' + f'{self.data["Close"][i]}' + '"'
+            volume = '"' + f'{self.data["Volume"][i]}' + '"'
+            dividends = '"' + f'{self.data["Dividends"][i]}' + '"'
+            splits = '"' + f'{self.data["Stock Splits"][i]}' + '"'
+            symbol = '"' + f'{self.symbol}' + '"'
+            sql = 'INSERT INTO all_data' + '(symbol, date, open, high, low, close, ' \
+                                      'volume, dividends,  ' \
+                                      'stock_splits)' + \
+                  ' VALUES (' + symbol + ', ' + dat + ', ' + ope + ', ' + high + \
+                  ', ' + low + ', ' + close + ', ' + volume + ', ' + dividends + ', ' + splits + ')'
+            mycursor.execute(sql)
+        # mycursor.execute(f'UPDATE {self.symbol} SET adj_high=NULL WHERE adj_high=0')
+        db.commit()
+
     def create_mysql_table(self):
         db = mysql.connector.connect(host='localhost',
                                      user=self.user,
@@ -112,21 +138,39 @@ class Trade:
                          f'stock_splits DECIMAL(20,4))')
         db.commit()
 
+    def create_all_data_table(self):
+        db = mysql.connector.connect(host='localhost',
+                                     user=self.user,
+                                     passwd=self.passwd)
+        mycursor = db.cursor()
+        mycursor.execute('USE python_stock')
+        mycursor.execute(f'CREATE TABLE all_data '
+                         f'(id INT AUTO_INCREMENT PRIMARY KEY, '
+                         f'symbol VARCHAR(5) DEFAULT "{self.symbol}", '
+                         f'date TIMESTAMP DEFAULT NOW(), '
+                         f'open DECIMAL(20,4), '
+                         f'high DECIMAL(20,4), '
+                         f'low DECIMAL(20,4), '
+                         f'close DECIMAL(20,4), '
+                         f'volume DECIMAL(30,4), '
+                         f'dividends DECIMAL(20,4), '
+                         f'stock_splits DECIMAL(20,4))')
+        db.commit()
+
     def predict_close(self):
         df = self.data
-        df = df.tail(7000) # number of days to train and test
-        close = df['Close'].values
+        df = df.tail(7000)  # number of days to train and test
         # Normalize data to [0,1] to fit into neural network
-        scaler = MinMaxScaler(feature_range=(0,1))
-        scaled_data = scaler.fit_transform(df['Close'].values.reshape(-1,1))
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
 
         x_train = []
         y_train = []
 
-        prediction_days = 1400 # should be 20% of len(df)
+        prediction_days = 1400  # should be 20% of len(df)
 
         for x in range(prediction_days, len(scaled_data)):
-            x_train.append(scaled_data[x-prediction_days:x, 0])
+            x_train.append(scaled_data[x - prediction_days:x, 0])
             y_train.append(scaled_data[x, 0])
 
         # convert x and y train to numpy array
@@ -136,20 +180,20 @@ class Trade:
 
         # Building model
         model = Sequential()
-        model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1],1)))
+        model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
         model.add(Dropout(0.2))
         model.add(LSTM(units=50, return_sequences=True))
         model.add(Dropout(0.2))
         model.add(LSTM(units=50, return_sequences=True))
         model.add(Dropout(0.2))
-        model.add(Dense(units=1)) # Prediction of closing price
+        model.add(Dense(units=1))  # Prediction of closing price
         model.compile(optimizer='adam', loss='mean_squared_error')
-        model.fit(x_train, y_train, epochs=25, batch_size=32) # sees data 25 times and 32 units at once
+        model.fit(x_train, y_train, epochs=25, batch_size=32)  # sees data 25 times and 32 units at once
 
         ''' TEST MODEL ACCURACY'''
         train_size = math.ceil(len(df['Close']) * 0.8)
         train_set = df['Close'].head(train_size).values
-        test_set = df['Close'].tail(len(df['Close'])-train_size).values
+        test_set = df['Close'].tail(len(df['Close']) - train_size).values
         total_set = np.concatenate((train_set, test_set), axis=0)
         model_inputs = total_set[len(df) - len(test_set) - prediction_days:]
         model_inputs = model_inputs.reshape(-1, 1)
@@ -188,12 +232,19 @@ symbols = ['AAPL', 'MSFT', 'AMZN', 'FB',
            'INTC', 'CSCO', 'PEP', 'AVGO',
            'TMUS', 'COST', 'TXN', 'QCOM']
 
+count = 0
 for symbol in symbols:
     trade = Trade(symbol)
-    trade.create_mysql_table()
-    trade.add_to_mysql()
-    # trade.drop_table()
+    if count < 1:
+        trade.create_all_data_table()
+    trade.add_to_all_data_mysql()
+    count += 1
+#     trade.create_mysql_table()
+#     trade.add_to_mysql()
+#     # trade.drop_table()
+#
+# symbol = 'AAPL'
+# trade = Trade(symbol)
+# trade.predict_close()
 
-symbol = 'AAPL'
-trade = Trade(symbol)
-trade.predict_close()
+
