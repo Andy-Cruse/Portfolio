@@ -70,6 +70,7 @@ class Trade:
         # fig.suptitle(f'{self.symbol} Stock {df.index[0]} to {df.index[len(df) - 1]}')
         plt.show()
 
+    # Adds values from yahoo API for single company to mysql table
     def add_to_mysql(self):
         db = mysql.connector.connect(host='localhost',
                                      user=self.user,
@@ -94,6 +95,7 @@ class Trade:
         # mycursor.execute(f'UPDATE {self.symbol} SET adj_high=NULL WHERE adj_high=0')
         db.commit()
 
+    # Adds values from yahoo API to mysql table for all companies
     def add_to_all_data_mysql(self):
         db = mysql.connector.connect(host='localhost',
                                      user=self.user,
@@ -119,6 +121,7 @@ class Trade:
         # mycursor.execute(f'UPDATE {self.symbol} SET adj_high=NULL WHERE adj_high=0')
         db.commit()
 
+    #creates mysql table to store data from api
     def create_mysql_table(self):
         db = mysql.connector.connect(host='localhost',
                                      user=self.user,
@@ -157,6 +160,7 @@ class Trade:
                          f'stock_splits DECIMAL(20,4))')
         db.commit()
 
+    #Uses Long Short Term Memory nearal network to predict close values in stock data
     def predict_close(self):
         df = self.data
         df = df.tail(7000)  # number of days to train and test
